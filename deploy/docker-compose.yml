@@ -1,0 +1,18 @@
+services:
+  projecttime:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: projecttime
+    restart: unless-stopped
+    ports:
+      - "5080:5080"
+    environment:
+      # Sätt ett starkt lösenord – webbgränssnittet visar all din aktivitet.
+      PROJECTTIME_ProjectTime__Password: "byt-mig"
+      PROJECTTIME_ProjectTime__TimeZone: "Europe/Stockholm"
+    volumes:
+      - projecttime-data:/data
+
+volumes:
+  projecttime-data:

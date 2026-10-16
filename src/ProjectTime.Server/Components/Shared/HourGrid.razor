@@ -1,0 +1,87 @@
+@* Dagen timme för timme: en rad per timme, en bana per enhet. *@
+@inject Clock Clock
+
+@if (_hours.Count == 0)
+{
+    <p class="muted">Ingen aktivitet registrerad.</p>
+}
+else
+{
+    <div class="hourgrid">
+        @foreach (var h in _hours)
+        {
+            <div class="hour-row">
+                <span class="hour-label">@h.ToString("00")</span>
+                <div class="hour-track" style="height:@(Math.Max(1, _devices.Count) * 14 + 2)px">
+                    @for (var q = 1; q < 4; q++) { <span class="hour-tick" style="left:@(q * 25)%"></span> }
+                    @foreach (var b in _byHour[h])
+                    {
+                        var hourStart = _dayStart.AddHours(h);
+                        var s = b.StartUtc < hourStart ? hourStart : b.StartUtc;
+                        var e = b.EndUtc > hourStart.AddHours(1) ? hourStart.AddHours(1) : b.EndUtc;
+                        var left = (s - hourStart).TotalSeconds / 36;
+                        var width = Math.Max(0.1, (e - s).TotalSeconds / 36);
+                        var lane = _devices.IndexOf(b.DeviceName);
+                        <div class="tl-block @(b.IsIdle ? "idle" : "")"
+                             style="left:@Pct(left);width:@Pct(width);top:@(lane * 14 + 1)px;height:12px;background:@b.Color"
+                             title="@Tip(b)"></div>
+                    }
+                </div>
+                <span class="hour-sum muted">@(_sums[h] > TimeSpan.Zero ? Clock.Hm(_sums[h]) : "")</span>
+            </div>
+        }
+        @if (_devices.Count > 1)
+        {
+            <div class="legend">
+                @for (var i = 0; i < _devices.Count; i++)
+                {
+                    <span class="legend-item"><span class="lane-key">Bana @(i + 1)</span> @_devices[i]</span>
+                }
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public DateOnly Day { get; set; }
+    [Parameter] public IReadOnlyList<TimelineBlock> Blocks { get; set; } = Array.Empty<TimelineBlock>();
+
+    private DateTime _dayStart;
+    private List<int> _hours = new();
+    private Dictionary<int, List<TimelineBlock>> _byHour = new();
+    private Dictionary<int, TimeSpan> _sums = new();
+    private List<string> _devices = new();
+
+    protected override void OnParametersSet()
+    {
+        _dayStart = Clock.DayBounds(Day).StartUtc;
+        _devices = Blocks.Select(b => b.DeviceName).Distinct().OrderBy(d => d).ToList();
+        _byHour = new();
+        _sums = new();
+        foreach (var b in Blocks)
+        {
+            var first = (int)Math.Floor((b.StartUtc - _dayStart).TotalHours);
+            var last = (int)Math.Floor((b.EndUtc - _dayStart).TotalSeconds / 3600 - 0.0001);
+            for (var h = Math.Max(0, first); h <= Math.Min(23, last); h++)
+            {
+                if (!_byHour.TryGetValue(h, out var list)) _byHour[h] = list = new();
+                list.Add(b);
+                if (!b.IsIdle)
+                {
+                    var hs = _dayStart.AddHours(h);
+                    var s = b.StartUtc < hs ? hs : b.StartUtc;
+                    var e = b.EndUtc > hs.AddHours(1) ? hs.AddHours(1) : b.EndUtc;
+                    _sums[h] = _sums.GetValueOrDefault(h) + (e - s);
+                }
+            }
+        }
+        if (_byHour.Count == 0) { _hours = new(); return; }
+        var lo = _byHour.Keys.Min();
+        var hi = _byHour.Keys.Max();
+        _hours = Enumerable.Range(lo, hi - lo + 1).ToList();
+        foreach (var h in _hours) { _byHour.TryAdd(h, new()); _sums.TryAdd(h, TimeSpan.Zero); }
+    }
+
+    private string Tip(TimelineBlock b) => $"{Clock.Time(b.StartUtc)}–{Clock.Time(b.EndUtc)} · {b.Label} · {b.DeviceName} · {Clock.Hm(b.Duration)}";
+    private static string Pct(double v) => v.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + "%";
+}

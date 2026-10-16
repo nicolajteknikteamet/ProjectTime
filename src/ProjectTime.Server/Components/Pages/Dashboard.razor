@@ -1,0 +1,115 @@
+@page "/"
+@inject ReportService ReportSvc
+@inject Clock Clock
+@implements IDisposable
+
+<PageTitle>Översikt – ProjectTime</PageTitle>
+
+<header class="page-head">
+    <h1>@Clock.DayName(_day)</h1>
+    <DayNav Day="_day" DeviceId="_deviceId" Today="Clock.Today" BasePath="/" />
+</header>
+
+@if (_summary is null)
+{
+    <p class="muted">Laddar…</p>
+}
+else
+{
+    <section class="tiles">
+        <StatTile Hero="true" Label="Aktiv tid" Value="@Clock.Hm(_summary.Active)" Sub="@Span()" />
+        <StatTile Label="Inaktiv" Value="@Clock.Hm(_summary.Idle)" Sub="utan tangentbord/mus" />
+        <StatTile Label="Ej tilldelad" Value="@Clock.Hm(_summary.Unassigned)" Sub="@(_summary.Active > TimeSpan.Zero ? $"{_summary.Unassigned / _summary.Active:P0} av aktiv tid" : "")" />
+        <StatTile Label="Projekt" Value="@_summary.Projects.Count(p => p.Project.Id != null).ToString()" Sub="@($"{_summary.Apps.Count} program · {_summary.Devices.Count} {(_summary.Devices.Count == 1 ? "enhet" : "enheter")}")" />
+    </section>
+
+    @if (_summary.IsEmpty)
+    {
+        <div class="card empty">
+            <p>Ingen aktivitet registrerad den här dagen.</p>
+            <p class="muted">Kontrollera att agenten körs på dina datorer och att enheten är registrerad under <a href="/enheter">Enheter</a>.</p>
+        </div>
+    }
+    else
+    {
+        <section class="card">
+            <div class="card-head"><h2>Dygnet</h2><span class="muted">@_live</span></div>
+            <DayStrip Day="_day" Blocks="_summary.Blocks" />
+            <div class="legend">
+                @foreach (var p in _summary.Projects)
+                {
+                    <span class="legend-item"><Swatch Color="@p.Project.Color" />@p.Project.Name</span>
+                }
+                @if (_summary.Idle > TimeSpan.Zero) { <span class="legend-item"><Swatch Color="@Palette.Idle" />Inaktiv</span> }
+            </div>
+        </section>
+
+        <div class="grid-2">
+            <section class="card">
+                <div class="card-head"><h2>Per projekt</h2><a class="muted" href="/aktiviteter?d=@_day.ToString("yyyy-MM-dd")">Tilldela →</a></div>
+                <BarList Items="_summary.Projects.Select(p => new BarList.Item(p.Project.Name, p.Duration, p.Project.Color, p.Share)).ToList()" />
+            </section>
+            <section class="card">
+                <div class="card-head"><h2>Per program</h2></div>
+                <BarList Items="_summary.Apps.Select(a => new BarList.Item(a.AppName, a.Duration, null, a.Share)).ToList()" Max="10" />
+            </section>
+        </div>
+
+        <section class="card">
+            <div class="card-head"><h2>Timme för timme</h2></div>
+            <HourGrid Day="_day" Blocks="_summary.Blocks" />
+        </section>
+
+        @if (_summary.Devices.Count > 1)
+        {
+            <section class="card">
+                <div class="card-head"><h2>Per enhet</h2></div>
+                <table class="table">
+                    <thead><tr><th>Enhet</th><th class="num">Aktiv</th><th class="num">Inaktiv</th></tr></thead>
+                    <tbody>
+                        @foreach (var d in _summary.Devices)
+                        {
+                            <tr><td>@d.DeviceName</td><td class="num">@Clock.Hm(d.Active)</td><td class="num">@Clock.Hm(d.Idle)</td></tr>
+                        }
+                    </tbody>
+                </table>
+                <p class="muted tiny">Summan "Aktiv tid" räknar inte tid dubbelt när flera enheter är aktiva samtidigt.</p>
+            </section>
+        }
+    }
+}
+
+@code {
+    [SupplyParameterFromQuery(Name = "d")] public string? DayParam { get; set; }
+    [SupplyParameterFromQuery(Name = "enhet")] public int? DeviceParam { get; set; }
+
+    private DateOnly _day;
+    private int? _deviceId;
+    private DaySummary? _summary;
+    private string _live = "";
+    private Timer? _timer;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _day = DateOnly.TryParse(DayParam, out var d) ? d : Clock.Today;
+        _deviceId = DeviceParam;
+        await LoadAsync();
+    }
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (firstRender)
+            _timer = new Timer(async _ => { await InvokeAsync(async () => { if (_day == Clock.Today) { await LoadAsync(); StateHasChanged(); } }); },
+                null, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(60));
+    }
+
+    private async Task LoadAsync()
+    {
+        _summary = await ReportSvc.GetDayAsync(_day, _deviceId);
+        _live = _day == Clock.Today ? $"Uppdaterad {DateTime.Now:HH:mm}" : "";
+    }
+
+    private string Span() => _summary?.FirstUtc is { } f && _summary.LastUtc is { } l ? $"{Clock.Time(f)} – {Clock.Time(l)}" : "ingen aktivitet";
+
+    public void Dispose() => _timer?.Dispose();
+}

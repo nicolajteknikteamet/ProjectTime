@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- launchd-agent för macOS. Lägg i ~/Library/LaunchAgents/ och kör:
+       launchctl load -w ~/Library/LaunchAgents/nu.projecttime.agent.plist
+     Ge sedan programmet "Hjälpmedel"- och "Automation"-behörighet när macOS frågar. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>nu.projecttime.agent</string>
+  <key>ProgramArguments</key>
+  <array><string>/Users/DITT_ANVÄNDARNAMN/Library/Application Support/ProjectTime/bin/projecttime-agent</string></array>
+  <key>WorkingDirectory</key><string>/Users/DITT_ANVÄNDARNAMN/Library/Application Support/ProjectTime/bin</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/tmp/projecttime-agent.log</string>
+  <key>StandardErrorPath</key><string>/tmp/projecttime-agent.log</string>
+</dict>
+</plist>

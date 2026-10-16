@@ -1,0 +1,135 @@
+@page "/enheter"
+@inject CatalogService Catalog
+@inject Clock Clock
+@inject IJSRuntime JS
+@inject NavigationManager Nav
+
+<PageTitle>Enheter – ProjectTime</PageTitle>
+
+<header class="page-head"><h1>Enheter</h1></header>
+
+<p class="muted">Varje dator du arbetar på kör en agent som skickar aktivitet hit. Registrera datorn här och lägg nyckeln i agentens konfiguration.</p>
+
+@if (_newKey is not null)
+{
+    <div class="card key-card">
+        <h2>Nyckel för @_newKeyDevice</h2>
+        <p>Kopiera nyckeln nu – den visas bara en gång och lagras bara som hash på servern.</p>
+        <pre class="key">@_newKey</pre>
+        <p class="muted tiny">Konfigurera agenten (appsettings.json på datorn, eller miljövariabler):</p>
+<pre class="code">{
+  "Agent": {
+    "ServerUrl": "@_serverUrl",
+    "ApiKey": "@_newKey",
+    "DeviceName": "@_newKeyDevice"
+  }
+}</pre>
+        <button class="btn ghost small" @onclick="() => _newKey = null">Stäng</button>
+    </div>
+}
+
+<div class="grid-2">
+    <section class="card">
+        <div class="card-head"><h2>Registrera dator</h2></div>
+        <div class="form-col">
+            <label>Namn <input type="text" @bind="_newName" placeholder="t.ex. Kontorsdator, MacBook" /></label>
+            @if (_error is not null) { <p class="error">@_error</p> }
+            <button class="btn primary" @onclick="CreateAsync" disabled="@string.IsNullOrWhiteSpace(_newName)">Skapa och visa nyckel</button>
+        </div>
+    </section>
+
+    <section class="card">
+        <div class="card-head"><h2>Registrerade datorer <span class="muted">@_devices.Count</span></h2></div>
+        @if (_devices.Count == 0)
+        {
+            <p class="muted">Inga datorer registrerade ännu.</p>
+        }
+        else
+        {
+            <table class="table">
+                <thead><tr><th>Namn</th><th>Status</th><th>Plattform</th><th>Agent</th><th></th></tr></thead>
+                <tbody>
+                    @foreach (var d in _devices)
+                    {
+                        var online = d.LastSeenUtc is { } seen && DateTime.UtcNow - seen < TimeSpan.FromMinutes(3);
+                        <tr>
+                            <td>@d.Name</td>
+                            <td class="nowrap">
+                                <span class="status @(online ? "online" : "")" aria-hidden="true"></span>
+                                @(online ? "Online" : d.LastSeenUtc is { } s ? $"Senast {Clock.ToLocal(s):yyyy-MM-dd HH:mm}" : "Aldrig ansluten")
+                            </td>
+                            <td>@d.Platform</td>
+                            <td>@d.AgentVersion</td>
+                            <td class="num nowrap">
+                                <button class="btn ghost small" @onclick="() => RotateAsync(d)">Ny nyckel</button>
+                                <button class="btn ghost small danger" @onclick="() => DeleteAsync(d)">Ta bort</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </section>
+</div>
+
+<section class="card">
+    <div class="card-head"><h2>Dataminimering</h2></div>
+    <p class="muted">Radera spårade aktiviteter äldre än ett visst datum. Tidsposter påverkas inte.</p>
+    <div class="form-row">
+        <label>Radera allt före <input type="date" @bind="_purgeBefore" /></label>
+        <button class="btn ghost danger" @onclick="PurgeAsync">Radera</button>
+    </div>
+    @if (_purgeMessage is not null) { <div class="flash">@_purgeMessage</div> }
+</section>
+
+@code {
+    private List<Device> _devices = new();
+    private string? _newName, _newKey, _newKeyDevice, _error, _purgeMessage;
+    private string _serverUrl = "";
+    private DateOnly _purgeBefore;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _serverUrl = Nav.BaseUri.TrimEnd('/');
+        _purgeBefore = Clock.Today.AddMonths(-6);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync() => _devices = await Catalog.GetDevicesAsync();
+
+    private async Task CreateAsync()
+    {
+        _error = null;
+        try
+        {
+            var (device, key) = await Catalog.CreateDeviceAsync(_newName!);
+            _newKey = key;
+            _newKeyDevice = device.Name;
+            _newName = null;
+            await LoadAsync();
+        }
+        catch (Exception ex) { _error = "Kunde inte skapa enheten (finns namnet redan?): " + ex.GetBaseException().Message; }
+    }
+
+    private async Task RotateAsync(Device d)
+    {
+        if (!await JS.InvokeAsync<bool>("confirm", $"Skapa ny nyckel för {d.Name}? Den gamla slutar fungera direkt.")) return;
+        _newKey = await Catalog.RotateKeyAsync(d.Id);
+        _newKeyDevice = d.Name;
+    }
+
+    private async Task DeleteAsync(Device d)
+    {
+        var n = await Catalog.CountActivitiesAsync(d.Id);
+        if (!await JS.InvokeAsync<bool>("confirm", $"Ta bort {d.Name} och dess {n} registrerade aktiviteter? Detta går inte att ångra.")) return;
+        await Catalog.DeleteDeviceAsync(d.Id);
+        await LoadAsync();
+    }
+
+    private async Task PurgeAsync()
+    {
+        if (!await JS.InvokeAsync<bool>("confirm", $"Radera alla aktiviteter före {_purgeBefore:yyyy-MM-dd}? Detta går inte att ångra.")) return;
+        var n = await Catalog.PurgeActivitiesBeforeAsync(_purgeBefore);
+        _purgeMessage = $"{n} aktiviteter raderade.";
+    }
+}

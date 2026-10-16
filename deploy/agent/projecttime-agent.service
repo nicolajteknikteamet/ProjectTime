@@ -1,0 +1,16 @@
+# systemd-användartjänst för Linux (X11). Lägg i ~/.config/systemd/user/ och kör:
+#   systemctl --user daemon-reload && systemctl --user enable --now projecttime-agent
+# Kräver paketen xdotool och xprintidle.
+[Unit]
+Description=ProjectTime Agent (automatisk tidsspårning)
+After=graphical-session.target
+
+[Service]
+ExecStart=%h/.local/share/ProjectTime/bin/projecttime-agent
+WorkingDirectory=%h/.local/share/ProjectTime/bin
+Restart=always
+RestartSec=5
+Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
+
+[Install]
+WantedBy=default.target

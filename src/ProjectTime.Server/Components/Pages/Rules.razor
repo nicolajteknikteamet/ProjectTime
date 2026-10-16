@@ -1,0 +1,128 @@
+@page "/regler"
+@inject CatalogService Catalog
+
+<PageTitle>Regler – ProjectTime</PageTitle>
+
+<header class="page-head">
+    <h1>Regler</h1>
+    <div class="daynav">
+        <button class="btn ghost small" @onclick="() => ReapplyAsync(true)">Tillämpa på ej tilldelade</button>
+        <button class="btn ghost small" @onclick="() => ReapplyAsync(false)" title="Räknar om alla aktiviteter som inte tilldelats manuellt">Räkna om allt</button>
+    </div>
+</header>
+
+<p class="muted">Regler tilldelar aktiviteter till projekt automatiskt utifrån program, fönstertitel eller sökväg. Regler med högre prioritet prövas först; första träff vinner. Manuella tilldelningar skrivs aldrig över.</p>
+@if (_message is not null) { <div class="flash">@_message</div> }
+
+<div class="grid-2">
+    <section class="card">
+        <div class="card-head"><h2>@(_edit.Id == 0 ? "Ny regel" : "Redigera regel")</h2></div>
+        <div class="form-col">
+            <label>Projekt
+                <select class="select" @bind="_edit.ProjectId">
+                    <option value="0">Välj…</option>
+                    @foreach (var p in _projects) { <option value="@p.Id">@p.Name</option> }
+                </select>
+            </label>
+            <div class="form-row">
+                <label>Fält
+                    <select class="select" @bind="_edit.Field">
+                        <option value="@RuleField.Title">Fönstertitel</option>
+                        <option value="@RuleField.App">Program</option>
+                        <option value="@RuleField.Path">Sökväg</option>
+                        <option value="@RuleField.Any">Något av dem</option>
+                    </select>
+                </label>
+                <label>Matchning
+                    <select class="select" @bind="_edit.Match">
+                        <option value="@RuleMatch.Contains">innehåller</option>
+                        <option value="@RuleMatch.StartsWith">börjar med</option>
+                        <option value="@RuleMatch.Equals">är exakt</option>
+                        <option value="@RuleMatch.Regex">reguljärt uttryck</option>
+                    </select>
+                </label>
+            </div>
+            <label>Mönster <input type="text" @bind="_edit.Pattern" placeholder="t.ex. kundportal eller github.com/acme" /></label>
+            <div class="form-row">
+                <label>Prioritet <input type="number" @bind="_edit.Priority" /></label>
+                <label class="check"><input type="checkbox" @bind="_edit.Enabled" /> Aktiv</label>
+            </div>
+            @if (_error is not null) { <p class="error">@_error</p> }
+            <div class="form-row">
+                <button class="btn primary" @onclick="SaveAsync" disabled="@(_edit.ProjectId == 0 || string.IsNullOrWhiteSpace(_edit.Pattern))">Spara</button>
+                @if (_edit.Id != 0) { <button class="btn ghost" @onclick="() => _edit = new Rule { Enabled = true }">Avbryt</button> }
+            </div>
+        </div>
+    </section>
+
+    <section class="card">
+        <div class="card-head"><h2>Alla regler <span class="muted">@_rules.Count</span></h2></div>
+        @if (_rules.Count == 0)
+        {
+            <p class="muted">Inga regler ännu. Det enklaste sättet att skapa regler är att tilldela fönster under <a href="/aktiviteter">Aktiviteter</a>.</p>
+        }
+        else
+        {
+            <table class="table">
+                <thead><tr><th class="num">Prio</th><th>Villkor</th><th>Projekt</th><th></th></tr></thead>
+                <tbody>
+                    @foreach (var r in _rules)
+                    {
+                        <tr class="@(r.Enabled ? "" : "muted")">
+                            <td class="num">@r.Priority</td>
+                            <td><span class="pill">@FieldName(r.Field)</span> @MatchName(r.Match) <code class="ellipsis" title="@r.Pattern">@r.Pattern</code></td>
+                            <td class="nowrap"><Swatch Color="@(r.Project?.Color ?? "#999")" /> @r.Project?.Name</td>
+                            <td class="num nowrap">
+                                <button class="btn ghost small" @onclick="() => Edit(r)">Redigera</button>
+                                <button class="btn ghost small danger" @onclick="() => DeleteAsync(r.Id)">Ta bort</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </section>
+</div>
+
+@code {
+    private List<Rule> _rules = new();
+    private List<Project> _projects = new();
+    private Rule _edit = new() { Enabled = true };
+    private string? _message, _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _projects = await Catalog.GetProjectsAsync();
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync() => _rules = await Catalog.GetRulesAsync();
+
+    private void Edit(Rule r) => _edit = new Rule { Id = r.Id, ProjectId = r.ProjectId, Field = r.Field, Match = r.Match, Pattern = r.Pattern, Priority = r.Priority, Enabled = r.Enabled };
+
+    private async Task SaveAsync()
+    {
+        _error = null;
+        if (!RuleMatcher.IsValidPattern(_edit.Match, _edit.Pattern)) { _error = "Ogiltigt reguljärt uttryck."; return; }
+        await Catalog.SaveRuleAsync(_edit);
+        _edit = new Rule { Enabled = true };
+        await LoadAsync();
+        var n = await Catalog.ReapplyRulesAsync(onlyUnassigned: true);
+        _message = $"Regel sparad. {n} ej tilldelade aktiviteter fick projekt.";
+    }
+
+    private async Task DeleteAsync(int id)
+    {
+        await Catalog.DeleteRuleAsync(id);
+        await LoadAsync();
+    }
+
+    private async Task ReapplyAsync(bool onlyUnassigned)
+    {
+        var n = await Catalog.ReapplyRulesAsync(onlyUnassigned);
+        _message = $"{n} aktiviteter uppdaterade.";
+    }
+
+    private static string FieldName(RuleField f) => f switch { RuleField.App => "program", RuleField.Title => "titel", RuleField.Path => "sökväg", _ => "något" };
+    private static string MatchName(RuleMatch m) => m switch { RuleMatch.Contains => "innehåller", RuleMatch.StartsWith => "börjar med", RuleMatch.Equals => "är", _ => "matchar" };
+}
