@@ -23,7 +23,7 @@ builder.Services.AddHttpClient("server", (sp, client) =>
     var o = sp.GetRequiredService<IOptions<AgentOptions>>().Value;
     client.BaseAddress = new Uri(o.ServerUrl.TrimEnd('/') + "/");
     client.DefaultRequestHeaders.Add(AgentApi.ApiKeyHeader, o.ApiKey);
-    client.Timeout = TimeSpan.FromSeconds(20);
+    client.Timeout = TimeSpan.FromSeconds(45); // täcker kallstart av en sovande gratis-App Service
 });
 builder.Services.AddHostedService<TrackerService>();
 builder.Services.AddHostedService<SyncService>();

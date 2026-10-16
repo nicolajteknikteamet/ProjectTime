@@ -50,15 +50,44 @@ När flera datorer är aktiva samtidigt räknas tiden inte dubbelt i summeringar
 
 ### 1. Servern
 
-**Med Docker (rekommenderat):**
+Välj ett av tre sätt. **Gratis i Azure** kräver varken egen server eller Docker.
 
-```bash
-cd deploy
-# Sätt lösenord och tidszon i docker-compose.yml
-docker compose up -d --build
-```
+#### A. Gratis i Azure App Service (rekommenderat om du inte har en server)
 
-**Utan Docker:**
+Azure App Service har en gratisnivå, **Free (F1)**, som inte kostar något och räcker för en personlig tidsspårning:
+60 CPU‑minuter per dag, 1 GB lagring, HTTPS på `*.azurewebsites.net`. Appen somnar efter 20 minuters inaktivitet och
+vaknar vid nästa anrop (några sekunders kallstart). Agenterna buffrar lokalt, så inget går förlorat om appen sover eller
+dagskvoten tar slut.
+
+Vi använder **Windows‑varianten** av F1: på gratisnivån ligger filsystemet på en nätverksresurs och Microsoft avråder
+från SQLite på Linux‑App Service (inga exklusiva fillås), medan det fungerar på Windows. Databasen hamnar automatiskt i
+`D:\home\data`, som är beständigt.
+
+1. Skapa ett [kostnadsfritt Azure‑konto](https://azure.microsoft.com/free/) om du inte har ett.
+2. Öppna [Azure Cloud Shell](https://shell.azure.com) (Bash) i webbläsaren och kör skriptet som skapar allt:
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/<ägare>/ProjectTime/main/deploy/azure/create-azure.sh -o create-azure.sh
+   bash create-azure.sh projecttime-dittnamn 'ett-starkt-lösenord'
+   ```
+
+   Skriptet skapar resursgrupp, F1‑plan och webbapp, slår på WebSockets och HTTPS, sätter lösenord och tidszon
+   och laddar ner publiceringsprofilen.
+3. Lägg in i GitHub‑repot under *Settings → Secrets and variables → Actions*:
+   hemligheten `AZURE_WEBAPP_PUBLISH_PROFILE` (innehållet i `.PublishSettings`‑filen) och variabeln `AZURE_WEBAPP_NAME`.
+4. Kör workflowen **Deploy to Azure** (eller pusha till `main`). Den bygger, kör testerna, driftsätter och kontrollerar
+   att `/healthz` svarar. Varje push till `main` driftsätter sedan automatiskt.
+
+Du kan också göra steg 2 i portalen: *Create → Web App*, Runtime stack **.NET 10 (LTS)**, OS **Windows**, plan **Free F1**;
+slå på *WebSockets* och *HTTPS Only* under Configuration, lägg till app‑inställningarna
+`PROJECTTIME_ProjectTime__Password` och `PROJECTTIME_ProjectTime__TimeZone`, och hämta publiceringsprofilen från Overview.
+
+Begränsningar på gratisnivån: 165 MB utgående trafik per dag, max 5 samtidiga WebSocket‑anslutningar (varje öppen
+flik i webbgränssnittet är en), och överskrids CPU‑kvoten svarar appen 403 till midnatt UTC. Agenterna synkar var
+60:e sekund som standard, vilket ligger långt under kvoten. Ta en kopia av `D:\home\data\projecttime.db` ibland
+(t.ex. via *Advanced Tools → Kudu*), eftersom gratisnivån saknar säkerhetskopiering.
+
+#### B. Egen maskin utan Docker
 
 ```bash
 dotnet publish src/ProjectTime.Server -c Release -o /opt/projecttime
@@ -68,18 +97,31 @@ PROJECTTIME_ProjectTime__TimeZone='Europe/Stockholm' \
 dotnet ProjectTime.Server.dll
 ```
 
-Servern lyssnar på `http://0.0.0.0:5080`. Databas och nycklar hamnar i katalogen `data/` (eller `/data` i Docker).
+Servern lyssnar på `http://0.0.0.0:5080` (ändra med `--urls`). Databas och nycklar hamnar i katalogen `data/`.
 Lägg den bakom en reverse proxy med HTTPS (Caddy, nginx, Traefik) om agenterna når den över internet.
 
-Inställningar (`appsettings.json` under `ProjectTime`, eller miljövariabler `PROJECTTIME_ProjectTime__<Namn>`):
+#### C. Docker
+
+```bash
+cd deploy
+# Sätt lösenord och tidszon i docker-compose.yml
+docker compose up -d --build
+```
+
+Data hamnar i volymen `/data`.
+
+#### Inställningar
+
+`appsettings.json` under `ProjectTime`, eller miljövariabler/app‑inställningar `PROJECTTIME_ProjectTime__<Namn>`:
 
 | Inställning | Standard | Beskrivning |
 |---|---|---|
 | `Password` | *(tomt)* | Lösenord till webbgränssnittet. Tomt = ingen inloggning – använd bara på ett skyddat nätverk. |
 | `TimeZone` | `Europe/Stockholm` | Tidszon som dagar och klockslag visas i. |
-| `DataDirectory` | `data` | Var SQLite-databasen lagras. |
+| `DataDirectory` | `data` (`%HOME%/data` i App Service) | Var SQLite‑databasen lagras. |
 | `MinVisibleSeconds` | `5` | Aktiviteter kortare än detta döljs i detaljlistor (räknas ändå). |
 | `BookingMergeGapMinutes` | `5` | Luckor kortare än detta slås ihop när tidsposter föreslås. |
+| `SqliteJournalMode` | `WAL` (`DELETE` i App Service) | SQLite‑journalläge. WAL kräver lokal disk; DELETE fungerar på nätverksresurser. |
 
 ### 2. Registrera datorn
 
@@ -106,7 +148,7 @@ Konfigurera via `appsettings.json` bredvid programmet, miljövariabler (`PROJECT
     "DeviceName": "Kontorsdator",
     "SampleIntervalSeconds": 2,
     "IdleThresholdSeconds": 180,
-    "SyncIntervalSeconds": 30,
+    "SyncIntervalSeconds": 60,
     "TrackWindowTitles": true,
     "ExcludedApps": [ "1Password", "KeePassXC", "Bitwarden" ]
   }
@@ -144,7 +186,7 @@ src/ProjectTime.Shared   DTO:er för API:t mellan agent och server
 src/ProjectTime.Agent    Spårningsagent (Windows/macOS/Linux), lokal buffert, synk
 src/ProjectTime.Server   ASP.NET Core + Blazor Server, EF Core/SQLite, API, rapporter
 tests/ProjectTime.Tests  xUnit: segmentering, regler, intervallaritmetik, integrationstester mot SQLite
-deploy/                  Dockerfile, docker-compose, tjänstfiler för agenten
+deploy/                  Azure-skript, Dockerfile, docker-compose, tjänstfiler för agenten
 ```
 
 Bygg och testa:

@@ -20,7 +20,7 @@ public sealed class AgentOptions
     public int IdleThresholdSeconds { get; set; } = 180;
 
     /// <summary>Hur ofta buffrade segment skickas till servern.</summary>
-    public int SyncIntervalSeconds { get; set; } = 30;
+    public int SyncIntervalSeconds { get; set; } = 60;
 
     /// <summary>Katalog för den lokala bufferten (SQLite). Standard: %LOCALAPPDATA%/ProjectTime eller ~/.local/share/ProjectTime.</summary>
     public string? DataDirectory { get; set; }
