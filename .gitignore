@@ -55,3 +55,9 @@ CodeCoverage/
 *.VisualState.xml
 TestResult.xml
 nunit-*.xml
+
+# ProjectTime: lokal data (databas, nycklar)
+data/
+*.db
+*.db-shm
+*.db-wal

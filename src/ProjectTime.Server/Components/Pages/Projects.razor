@@ -1,0 +1,103 @@
+@page "/projekt"
+@inject CatalogService Catalog
+@inject IJSRuntime JS
+
+<PageTitle>Projekt – ProjectTime</PageTitle>
+
+<header class="page-head">
+    <h1>Projekt</h1>
+    <label class="check"><input type="checkbox" @bind="_showArchived" @bind:after="LoadAsync" /> Visa arkiverade</label>
+</header>
+
+<div class="grid-2">
+    <section class="card">
+        <div class="card-head"><h2>@(_edit.Id == 0 ? "Nytt projekt" : $"Redigera {_edit.Name}")</h2></div>
+        <div class="form-col">
+            <label>Namn <input type="text" @bind="_edit.Name" placeholder="t.ex. Kundportal" /></label>
+            <label>Kund <input type="text" @bind="_edit.Client" placeholder="valfritt" /></label>
+            <div class="form-row">
+                <label>Färg <input type="color" @bind="_edit.Color" /></label>
+                <label>Timpris <input type="number" @bind="_edit.HourlyRate" step="50" placeholder="valfritt" /></label>
+            </div>
+            <div class="palette">
+                @foreach (var c in Palette.Categorical)
+                {
+                    <button type="button" class="palette-dot @(c == _edit.Color ? "active" : "")" style="background:@c" title="@c" @onclick="() => _edit.Color = c"></button>
+                }
+            </div>
+            @if (_edit.Id != 0) { <label class="check"><input type="checkbox" @bind="_edit.IsArchived" /> Arkiverat</label> }
+            @if (_error is not null) { <p class="error">@_error</p> }
+            <div class="form-row">
+                <button class="btn primary" @onclick="SaveAsync" disabled="@string.IsNullOrWhiteSpace(_edit.Name)">Spara</button>
+                @if (_edit.Id != 0) { <button class="btn ghost" @onclick="NewAsync">Avbryt</button> }
+            </div>
+        </div>
+    </section>
+
+    <section class="card">
+        <div class="card-head"><h2>Alla projekt <span class="muted">@_projects.Count</span></h2></div>
+        @if (_projects.Count == 0)
+        {
+            <p class="muted">Inga projekt ännu. Skapa ett till vänster, tilldela sedan aktiviteter under <a href="/aktiviteter">Aktiviteter</a>.</p>
+        }
+        else
+        {
+            <table class="table">
+                <thead><tr><th>Projekt</th><th>Kund</th><th class="num">Regler</th><th></th></tr></thead>
+                <tbody>
+                    @foreach (var p in _projects)
+                    {
+                        <tr class="@(p.IsArchived ? "muted" : "")">
+                            <td><Swatch Color="@p.Color" /> @p.Name @if (p.IsArchived) { <span class="pill">arkiverat</span> }</td>
+                            <td>@p.Client</td>
+                            <td class="num">@p.Rules.Count</td>
+                            <td class="num nowrap">
+                                <button class="btn ghost small" @onclick="() => Edit(p)">Redigera</button>
+                                <button class="btn ghost small danger" @onclick="() => DeleteAsync(p)">Ta bort</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </section>
+</div>
+
+@code {
+    private List<Project> _projects = new();
+    private Project _edit = new();
+    private bool _showArchived;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await NewAsync();
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync() => _projects = await Catalog.GetProjectsAsync(_showArchived);
+
+    private async Task NewAsync() => _edit = new Project { Color = await Catalog.NextColorAsync() };
+
+    private void Edit(Project p) => _edit = new Project { Id = p.Id, Name = p.Name, Client = p.Client, Color = p.Color, IsArchived = p.IsArchived, HourlyRate = p.HourlyRate };
+
+    private async Task SaveAsync()
+    {
+        _error = null;
+        try
+        {
+            await Catalog.SaveProjectAsync(_edit);
+            await NewAsync();
+            await LoadAsync();
+        }
+        catch (Exception ex) { _error = "Kunde inte spara: " + ex.GetBaseException().Message; }
+    }
+
+    private async Task DeleteAsync(Project p)
+    {
+        if (!await JS.InvokeAsync<bool>("confirm", $"Ta bort projektet \"{p.Name}\"? Regler och tidsposter för projektet raderas; aktiviteter blir ej tilldelade.")) return;
+        await Catalog.DeleteProjectAsync(p.Id);
+        if (_edit.Id == p.Id) await NewAsync();
+        await LoadAsync();
+    }
+}

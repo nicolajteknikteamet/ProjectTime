@@ -1,0 +1,30 @@
+@* Horisontella staplar: en rad per kategori, längd i proportion till den största. *@
+<div class="barlist">
+    @foreach (var item in Items.Take(Max))
+    {
+        var width = _max > 0 ? Math.Max(0.5, item.Value.TotalSeconds / _max * 100) : 0;
+        <div class="bar-row" title="@item.Label – @Clock.Hm(item.Value)">
+            <span class="bar-label">
+                @if (item.Color is not null) { <Swatch Color="@item.Color" /> }
+                <span class="ellipsis">@item.Label</span>
+            </span>
+            <div class="bar-track"><div class="bar-fill" style="width:@width.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)%;background:@(item.Color ?? "var(--series-1)")"></div></div>
+            <span class="bar-value">@Clock.Hm(item.Value)@(item.Share is { } s ? $" · {s:P0}" : "")</span>
+        </div>
+    }
+    @if (Items.Count > Max)
+    {
+        var rest = TimeSpan.FromTicks(Items.Skip(Max).Sum(i => i.Value.Ticks));
+        <div class="bar-row muted"><span class="bar-label">Övriga (@(Items.Count - Max))</span><div class="bar-track"></div><span class="bar-value">@Clock.Hm(rest)</span></div>
+    }
+</div>
+
+@code {
+    public sealed record Item(string Label, TimeSpan Value, string? Color = null, double? Share = null);
+
+    [Parameter] public IReadOnlyList<Item> Items { get; set; } = Array.Empty<Item>();
+    [Parameter] public int Max { get; set; } = 12;
+
+    private double _max;
+    protected override void OnParametersSet() => _max = Items.Count == 0 ? 0 : Items.Max(i => i.Value.TotalSeconds);
+}

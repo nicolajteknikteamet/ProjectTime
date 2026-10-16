@@ -1,0 +1,47 @@
+@inject NavigationManager Nav
+@inject CatalogService Catalog
+
+<div class="daynav">
+    <div class="daynav-date">
+        <button class="btn ghost" title="Föregående dag" @onclick="() => Go(Day.AddDays(-1))">‹</button>
+        <input type="date" value="@Day.ToString("yyyy-MM-dd")" @onchange="OnDateChanged" />
+        <button class="btn ghost" title="Nästa dag" @onclick="() => Go(Day.AddDays(1))" disabled="@(Day >= Today)">›</button>
+        <button class="btn ghost" @onclick="() => Go(Today)" disabled="@(Day == Today)">Idag</button>
+    </div>
+    <select class="select" value="@(DeviceId?.ToString() ?? "")" @onchange="OnDeviceChanged" title="Filtrera på enhet">
+        <option value="">Alla enheter</option>
+        @foreach (var d in _devices)
+        {
+            <option value="@d.Id">@d.Name</option>
+        }
+    </select>
+</div>
+
+@code {
+    [Parameter] public DateOnly Day { get; set; }
+    [Parameter] public int? DeviceId { get; set; }
+    [Parameter] public DateOnly Today { get; set; }
+    [Parameter] public string BasePath { get; set; } = "/";
+
+    private List<Device> _devices = new();
+
+    protected override async Task OnInitializedAsync() => _devices = await Catalog.GetDevicesAsync();
+
+    private void OnDateChanged(ChangeEventArgs e)
+    {
+        if (DateOnly.TryParse(e.Value?.ToString(), out var d)) Go(d);
+    }
+
+    private void OnDeviceChanged(ChangeEventArgs e)
+    {
+        var v = e.Value?.ToString();
+        DeviceId = int.TryParse(v, out var id) ? id : null;
+        Go(Day);
+    }
+
+    private void Go(DateOnly day)
+    {
+        var url = $"{BasePath}?d={day:yyyy-MM-dd}" + (DeviceId is { } id ? $"&enhet={id}" : "");
+        Nav.NavigateTo(url);
+    }
+}

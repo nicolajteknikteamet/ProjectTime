@@ -1,0 +1,191 @@
+@page "/tid"
+@inject TimeEntryService Entries
+@inject CatalogService Catalog
+@inject Clock Clock
+@inject NavigationManager Nav
+
+<PageTitle>Tidsposter – ProjectTime</PageTitle>
+
+<header class="page-head">
+    <h1>Tidsposter</h1>
+    <div class="daynav">
+        <button class="btn ghost" @onclick="() => Go(_weekStart.AddDays(-7))">‹</button>
+        <span class="nowrap">Vecka @System.Globalization.ISOWeek.GetWeekOfYear(_weekStart.ToDateTime(TimeOnly.MinValue)) · @Clock.ShortDay(_weekStart) – @Clock.ShortDay(_weekStart.AddDays(6))</span>
+        <button class="btn ghost" @onclick="() => Go(_weekStart.AddDays(7))">›</button>
+        <button class="btn ghost" @onclick="() => Go(Clock.StartOfWeek(Clock.Today))">Denna vecka</button>
+    </div>
+</header>
+
+<p class="muted">Tidsposter är den tid du <em>bokför</em> på projekt, till skillnad från den automatiskt spårade aktiviteten. Skapa dem från dagens aktiviteter eller manuellt.</p>
+@if (_message is not null) { <div class="flash">@_message</div> }
+
+<div class="grid-2">
+    <section class="card">
+        <div class="card-head"><h2>Skapa från aktiviteter</h2></div>
+        <div class="form-row">
+            <label>Dag <input type="date" @bind="_bookDay" @bind:after="SuggestAsync" /></label>
+            <label>Slå ihop luckor under
+                <select class="select" @bind="_gap" @bind:after="SuggestAsync">
+                    <option value="1">1 min</option><option value="5">5 min</option><option value="10">10 min</option><option value="15">15 min</option><option value="30">30 min</option>
+                </select>
+            </label>
+        </div>
+        @if (_suggestions.Count == 0)
+        {
+            <p class="muted">Inget att boka: ingen tilldelad aktivitet, eller allt är redan bokfört.</p>
+        }
+        else
+        {
+            <table class="table">
+                <thead><tr><th></th><th>Projekt</th><th>Tid</th><th class="num">Längd</th></tr></thead>
+                <tbody>
+                    @foreach (var s in _suggestions)
+                    {
+                        <tr>
+                            <td><input type="checkbox" checked="@_selected.Contains(s)" @onchange="e => Toggle(s, e)" /></td>
+                            <td><Swatch Color="@s.Color" /> @s.ProjectName</td>
+                            <td class="nowrap">@Clock.Time(s.StartUtc)–@Clock.Time(s.EndUtc)</td>
+                            <td class="num">@Clock.Hm(s.Duration)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+            <button class="btn primary" @onclick="BookAsync" disabled="@(_selected.Count == 0)">Bokför @_selected.Count valda (@Clock.Hm(TimeSpan.FromTicks(_selected.Sum(s => s.Duration.Ticks))))</button>
+        }
+    </section>
+
+    <section class="card">
+        <div class="card-head"><h2>Ny tidspost</h2></div>
+        <div class="form-col">
+            <label>Projekt
+                <select class="select" @bind="_newProjectId">
+                    <option value="0">Välj…</option>
+                    @foreach (var p in _projects) { <option value="@p.Id">@p.Name</option> }
+                </select>
+            </label>
+            <div class="form-row">
+                <label>Dag <input type="date" @bind="_newDay" /></label>
+                <label>Från <input type="time" @bind="_newStart" /></label>
+                <label>Till <input type="time" @bind="_newEnd" /></label>
+            </div>
+            <label>Anteckning <input type="text" @bind="_newNote" placeholder="valfritt" /></label>
+            <button class="btn primary" @onclick="AddManualAsync" disabled="@(_newProjectId == 0)">Lägg till</button>
+            @if (_error is not null) { <p class="error">@_error</p> }
+        </div>
+    </section>
+</div>
+
+<section class="card">
+    <div class="card-head">
+        <h2>Veckans tidsposter <span class="muted">@Clock.Hm(TimeSpan.FromTicks(_entries.Sum(e => e.Duration.Ticks)))</span></h2>
+        <a class="muted" href="/export/tid.csv?from=@_weekStart.ToString("yyyy-MM-dd")&to=@_weekStart.AddDays(6).ToString("yyyy-MM-dd")">Exportera CSV</a>
+    </div>
+    @if (_entries.Count == 0)
+    {
+        <p class="muted">Inga tidsposter den här veckan.</p>
+    }
+    else
+    {
+        @foreach (var dayGroup in _entries.GroupBy(e => Clock.LocalDate(e.StartUtc)))
+        {
+            <h3 class="day-heading">@Clock.DayName(dayGroup.Key) <span class="muted">@Clock.Hm(TimeSpan.FromTicks(dayGroup.Sum(e => e.Duration.Ticks)))</span></h3>
+            <table class="table">
+                <tbody>
+                    @foreach (var e in dayGroup)
+                    {
+                        <tr>
+                            <td class="nowrap">@Clock.Time(e.StartUtc)–@Clock.Time(e.EndUtc)</td>
+                            <td class="num nowrap">@Clock.Hm(e.Duration)</td>
+                            <td><Swatch Color="@(e.Project?.Color ?? "#999")" /> @e.Project?.Name</td>
+                            <td class="muted">@e.Note</td>
+                            <td class="num"><button class="btn ghost small danger" @onclick="() => DeleteAsync(e.Id)">Ta bort</button></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+        <div class="legend">
+            @foreach (var g in _entries.GroupBy(e => e.Project?.Name ?? "?").OrderByDescending(g => g.Sum(e => e.Duration.Ticks)))
+            {
+                <span class="legend-item"><Swatch Color="@(g.First().Project?.Color ?? "#999")" />@g.Key: <strong>@Clock.Hm(TimeSpan.FromTicks(g.Sum(e => e.Duration.Ticks)))</strong></span>
+            }
+        </div>
+    }
+</section>
+
+@code {
+    [SupplyParameterFromQuery(Name = "v")] public string? WeekParam { get; set; }
+
+    private DateOnly _weekStart;
+    private List<TimeEntry> _entries = new();
+    private List<Project> _projects = new();
+    private List<BookingSuggestion> _suggestions = new();
+    private HashSet<BookingSuggestion> _selected = new();
+    private DateOnly _bookDay;
+    private int _gap = 5;
+    private int _newProjectId;
+    private DateOnly _newDay;
+    private TimeOnly _newStart = new(9, 0);
+    private TimeOnly _newEnd = new(10, 0);
+    private string? _newNote;
+    private string? _message, _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _projects = await Catalog.GetProjectsAsync();
+        _bookDay = _newDay = Clock.Today;
+        await SuggestAsync();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _weekStart = Clock.StartOfWeek(DateOnly.TryParse(WeekParam, out var d) ? d : Clock.Today);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync() => _entries = await Entries.GetRangeAsync(_weekStart, _weekStart.AddDays(6));
+
+    private void Go(DateOnly d) => Nav.NavigateTo($"/tid?v={d:yyyy-MM-dd}");
+
+    private async Task SuggestAsync()
+    {
+        _suggestions = await Entries.SuggestAsync(_bookDay, null, _gap);
+        _selected = new HashSet<BookingSuggestion>(_suggestions);
+    }
+
+    private void Toggle(BookingSuggestion s, ChangeEventArgs e)
+    {
+        if (e.Value is true) _selected.Add(s); else _selected.Remove(s);
+    }
+
+    private async Task BookAsync()
+    {
+        var n = await Entries.BookAsync(_selected);
+        _message = $"{n} tidsposter bokförda.";
+        await SuggestAsync();
+        await LoadAsync();
+    }
+
+    private async Task AddManualAsync()
+    {
+        _error = null;
+        try
+        {
+            var start = Clock.ToUtc(_newDay.ToDateTime(_newStart));
+            var end = Clock.ToUtc(_newDay.ToDateTime(_newEnd));
+            await Entries.SaveAsync(new TimeEntry { ProjectId = _newProjectId, StartUtc = start, EndUtc = end, Note = _newNote });
+            _newNote = null;
+            _message = "Tidspost tillagd.";
+            await LoadAsync();
+            await SuggestAsync();
+        }
+        catch (ArgumentException ex) { _error = ex.Message; }
+    }
+
+    private async Task DeleteAsync(int id)
+    {
+        await Entries.DeleteAsync(id);
+        await LoadAsync();
+        await SuggestAsync();
+    }
+}

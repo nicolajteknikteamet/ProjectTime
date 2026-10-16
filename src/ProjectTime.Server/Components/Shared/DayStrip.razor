@@ -1,0 +1,50 @@
+@* Hela dygnet 00–24 som en tunn remsa per enhet. *@
+@inject Clock Clock
+
+<div class="daystrip">
+    @foreach (var lane in _lanes)
+    {
+        <div class="daystrip-lane">
+            <span class="daystrip-label ellipsis" title="@lane.Key">@lane.Key</span>
+            <div class="daystrip-track">
+                @foreach (var b in lane.Value)
+                {
+                    var (left, width) = Place(b);
+                    <div class="tl-block @(b.IsIdle ? "idle" : "")" style="left:@Pct(left);width:@Pct(width);background:@b.Color" title="@Tip(b)"></div>
+                }
+            </div>
+        </div>
+    }
+    <div class="daystrip-axis">
+        @for (var h = 0; h <= 24; h += 3)
+        {
+            <span style="left:@Pct(h / 24.0 * 100)">@h.ToString("00")</span>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public DateOnly Day { get; set; }
+    [Parameter] public IReadOnlyList<TimelineBlock> Blocks { get; set; } = Array.Empty<TimelineBlock>();
+
+    private List<KeyValuePair<string, List<TimelineBlock>>> _lanes = new();
+    private DateTime _lo, _hi;
+
+    protected override void OnParametersSet()
+    {
+        (_lo, _hi) = Clock.DayBounds(Day);
+        _lanes = Blocks.GroupBy(b => b.DeviceName).OrderBy(g => g.Key)
+            .Select(g => new KeyValuePair<string, List<TimelineBlock>>(g.Key, g.ToList())).ToList();
+    }
+
+    private (double Left, double Width) Place(TimelineBlock b)
+    {
+        var total = (_hi - _lo).TotalSeconds;
+        var left = (b.StartUtc - _lo).TotalSeconds / total * 100;
+        var width = Math.Max(0.05, (b.EndUtc - b.StartUtc).TotalSeconds / total * 100);
+        return (left, width);
+    }
+
+    private string Tip(TimelineBlock b) => $"{Clock.Time(b.StartUtc)}–{Clock.Time(b.EndUtc)} · {b.Label} · {Clock.Hm(b.Duration)}";
+    private static string Pct(double v) => v.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + "%";
+}

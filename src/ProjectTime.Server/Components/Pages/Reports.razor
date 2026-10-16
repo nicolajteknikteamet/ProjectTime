@@ -1,0 +1,159 @@
+@page "/rapporter"
+@inject ReportService ReportSvc
+@inject CatalogService Catalog
+@inject Clock Clock
+@inject NavigationManager Nav
+
+<PageTitle>Rapporter – ProjectTime</PageTitle>
+
+<header class="page-head">
+    <h1>Rapporter</h1>
+    <div class="daynav">
+        <button class="btn ghost small" @onclick="() => Preset(0)">Denna vecka</button>
+        <button class="btn ghost small" @onclick="() => Preset(1)">Förra veckan</button>
+        <button class="btn ghost small" @onclick="() => Preset(2)">Denna månad</button>
+        <button class="btn ghost small" @onclick="() => Preset(3)">Förra månaden</button>
+        <input type="date" value="@_from.ToString("yyyy-MM-dd")" @onchange="e => SetRange(e, true)" />
+        <span>–</span>
+        <input type="date" value="@_to.ToString("yyyy-MM-dd")" @onchange="e => SetRange(e, false)" />
+        <select class="select" value="@(_deviceId?.ToString() ?? "")" @onchange="OnDevice">
+            <option value="">Alla enheter</option>
+            @foreach (var d in _devices) { <option value="@d.Id">@d.Name</option> }
+        </select>
+    </div>
+</header>
+
+@if (_r is null)
+{
+    <p class="muted">Laddar…</p>
+}
+else
+{
+    <section class="tiles">
+        <StatTile Hero="true" Label="Aktiv tid" Value="@Clock.Hm(_r.Active)" Sub="@($"{_r.Days.Count} dagar · snitt {Clock.Hm(TimeSpan.FromTicks(_r.Active.Ticks / Math.Max(1, _r.ByDay.Count(d => d.Value > TimeSpan.Zero))))} per arbetad dag")" />
+        <StatTile Label="Bokförd tid" Value="@Clock.Hm(_r.Booked)" Sub="@(_r.Active > TimeSpan.Zero ? $"{_r.Booked / _r.Active:P0} av aktiv tid" : "")" />
+        <StatTile Label="Inaktiv" Value="@Clock.Hm(_r.Idle)" />
+        <StatTile Label="Arbetade dagar" Value="@_r.ByDay.Count(d => d.Value > TimeSpan.Zero).ToString()" />
+    </section>
+
+    <section class="card">
+        <div class="card-head"><h2>Aktiv tid per dag</h2><span class="muted">staplad per projekt</span></div>
+        @{
+            var maxDay = _r.ByDay.Values.DefaultIfEmpty(TimeSpan.Zero).Max().TotalHours;
+            var chartMax = Math.Max(1, Math.Ceiling(maxDay));
+            var labelEvery = _r.Days.Count > 14 ? (_r.Days.Count > 45 ? 7 : 2) : 1;
+        }
+        <div class="columns" style="--chart-max:@chartMax">
+            @for (var i = 0; i < _r.Days.Count; i++)
+            {
+                var day = _r.Days[i];
+                var total = _r.ByDay.GetValueOrDefault(day);
+                <div class="column" title="@Clock.ShortDay(day): @Clock.Hm(total)">
+                    <div class="column-stack">
+                        @foreach (var p in _r.ProjectOrder.AsEnumerable().Reverse())
+                        {
+                            if (_r.ByDayAndProject.TryGetValue((day, p.Id), out var v) && v > TimeSpan.Zero)
+                            {
+                                <div class="column-seg" style="height:@Pct(v.TotalHours / chartMax * 100);background:@p.Color" title="@Clock.ShortDay(day) · @p.Name · @Clock.Hm(v)"></div>
+                            }
+                        }
+                    </div>
+                    <span class="column-label @(i % labelEvery != 0 ? "hidden-label" : "")">@(_r.Days.Count > 7 ? day.Day.ToString() : Clock.ShortDay(day))</span>
+                </div>
+            }
+            <div class="column-axis"><span>@chartMax h</span><span>@(chartMax / 2) h</span><span>0</span></div>
+        </div>
+        <div class="legend">
+            @foreach (var p in _r.ProjectOrder) { <span class="legend-item"><Swatch Color="@p.Color" />@p.Name</span> }
+        </div>
+    </section>
+
+    <div class="grid-2">
+        <section class="card">
+            <div class="card-head"><h2>Per projekt</h2></div>
+            <table class="table">
+                <thead><tr><th>Projekt</th><th class="num">Spårad</th><th class="num">Bokförd</th><th class="num">Timmar</th></tr></thead>
+                <tbody>
+                    @foreach (var p in _r.ProjectOrder)
+                    {
+                        var tracked = _r.Projects.FirstOrDefault(x => x.Project.Id == p.Id)?.Duration ?? TimeSpan.Zero;
+                        var booked = _r.BookedFor(p.Id);
+                        <tr>
+                            <td><Swatch Color="@p.Color" /> @p.Name</td>
+                            <td class="num">@Clock.Hm(tracked)</td>
+                            <td class="num">@(booked > TimeSpan.Zero ? Clock.Hm(booked) : "–")</td>
+                            <td class="num">@Clock.Hours(booked > TimeSpan.Zero ? booked : tracked)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+            <p class="muted tiny">Kolumnen Timmar använder bokförd tid när sådan finns, annars spårad.</p>
+            <a class="btn ghost small" href="/export/tid.csv?from=@_from.ToString("yyyy-MM-dd")&to=@_to.ToString("yyyy-MM-dd")">Exportera tidsposter (CSV)</a>
+            <a class="btn ghost small" href="/export/aktiviteter.csv?from=@_from.ToString("yyyy-MM-dd")&to=@_to.ToString("yyyy-MM-dd")">Exportera aktiviteter (CSV)</a>
+        </section>
+        <section class="card">
+            <div class="card-head"><h2>Per program</h2></div>
+            <BarList Items="_r.Apps.Select(a => new BarList.Item(a.AppName, a.Duration, null, a.Share)).ToList()" Max="15" />
+        </section>
+    </div>
+
+    @if (_r.Devices.Count > 1)
+    {
+        <section class="card">
+            <div class="card-head"><h2>Per enhet</h2></div>
+            <BarList Items="_r.Devices.Select(d => new BarList.Item(d.DeviceName, d.Active)).ToList()" />
+        </section>
+    }
+}
+
+@code {
+    [SupplyParameterFromQuery(Name = "from")] public string? FromParam { get; set; }
+    [SupplyParameterFromQuery(Name = "to")] public string? ToParam { get; set; }
+    [SupplyParameterFromQuery(Name = "enhet")] public int? DeviceParam { get; set; }
+
+    private DateOnly _from, _to;
+    private int? _deviceId;
+    private RangeSummary? _r;
+    private List<Device> _devices = new();
+
+    protected override async Task OnInitializedAsync() => _devices = await Catalog.GetDevicesAsync();
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var today = Clock.Today;
+        _from = DateOnly.TryParse(FromParam, out var f) ? f : Clock.StartOfWeek(today);
+        _to = DateOnly.TryParse(ToParam, out var t) ? t : _from.AddDays(6);
+        _deviceId = DeviceParam;
+        _r = await ReportSvc.GetRangeAsync(_from, _to, _deviceId);
+    }
+
+    private void Preset(int which)
+    {
+        var today = Clock.Today;
+        var (f, t) = which switch
+        {
+            0 => (Clock.StartOfWeek(today), Clock.StartOfWeek(today).AddDays(6)),
+            1 => (Clock.StartOfWeek(today).AddDays(-7), Clock.StartOfWeek(today).AddDays(-1)),
+            2 => (new DateOnly(today.Year, today.Month, 1), new DateOnly(today.Year, today.Month, 1).AddMonths(1).AddDays(-1)),
+            _ => (new DateOnly(today.Year, today.Month, 1).AddMonths(-1), new DateOnly(today.Year, today.Month, 1).AddDays(-1)),
+        };
+        Go(f, t);
+    }
+
+    private void SetRange(ChangeEventArgs e, bool isFrom)
+    {
+        if (!DateOnly.TryParse(e.Value?.ToString(), out var d)) return;
+        if (isFrom) Go(d, _to < d ? d : _to); else Go(_from > d ? d : _from, d);
+    }
+
+    private void OnDevice(ChangeEventArgs e)
+    {
+        _deviceId = int.TryParse(e.Value?.ToString(), out var id) ? id : null;
+        Go(_from, _to);
+    }
+
+    private void Go(DateOnly f, DateOnly t) =>
+        Nav.NavigateTo($"/rapporter?from={f:yyyy-MM-dd}&to={t:yyyy-MM-dd}" + (_deviceId is { } id ? $"&enhet={id}" : ""));
+
+    private static string Pct(double v) => Math.Max(0, v).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture) + "%";
+}

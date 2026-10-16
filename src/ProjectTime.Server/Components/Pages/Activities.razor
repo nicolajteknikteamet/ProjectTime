@@ -1,0 +1,149 @@
+@page "/aktiviteter"
+@inject ReportService ReportSvc
+@inject CatalogService Catalog
+@inject Clock Clock
+@inject Microsoft.Extensions.Options.IOptions<ServerOptions> Options
+
+<PageTitle>Aktiviteter – ProjectTime</PageTitle>
+
+<header class="page-head">
+    <h1>Aktiviteter</h1>
+    <DayNav Day="_day" DeviceId="_deviceId" Today="Clock.Today" BasePath="/aktiviteter" />
+</header>
+
+@if (_summary is null)
+{
+    <p class="muted">Laddar…</p>
+}
+else if (_summary.IsEmpty)
+{
+    <div class="card empty"><p>Ingen aktivitet registrerad den här dagen.</p></div>
+}
+else
+{
+    <p class="muted">@Clock.DayName(_day) · aktiv @Clock.Hm(_summary.Active) · @_summary.Titles.Count fönster i @_summary.Apps.Count program.
+        Välj projekt per fönster; bocka i <em>skapa regel</em> för att framtida fönster med samma text ska tilldelas automatiskt.</p>
+
+    @if (_message is not null) { <div class="flash">@_message</div> }
+
+    <div class="toolbar">
+        <label class="check"><input type="checkbox" @bind="_onlyUnassigned" /> Visa bara ej tilldelade</label>
+        <label class="check"><input type="checkbox" @bind="_createRule" /> Skapa regel vid tilldelning</label>
+        <label>Dölj kortare än
+            <select class="select" @bind="_minSeconds">
+                <option value="0">–</option><option value="5">5 s</option><option value="30">30 s</option><option value="60">1 min</option><option value="300">5 min</option>
+            </select>
+        </label>
+        <span class="spacer"></span>
+        <button class="btn ghost small" @onclick="() => _showDetails = !_showDetails">@(_showDetails ? "Dölj" : "Visa") detaljerad lista</button>
+    </div>
+
+    @foreach (var app in _summary.Apps)
+    {
+        var titles = _summary.Titles.Where(t => t.AppName == app.AppName && t.Duration.TotalSeconds >= _minSeconds && (!_onlyUnassigned || t.Project.Id is null)).ToList();
+        if (titles.Count == 0) continue;
+        <section class="card">
+            <div class="card-head">
+                <h2>@app.AppName <span class="muted">@Clock.Hm(app.Duration)</span></h2>
+                <select class="select small" @onchange="e => AssignAsync(app.AppName, null, e)" title="Tilldela hela programmet">
+                    <option value="">Tilldela hela programmet…</option>
+                    @foreach (var p in _projects) { <option value="@p.Id">@p.Name</option> }
+                    <option value="0">Ta bort tilldelning</option>
+                </select>
+            </div>
+            <table class="table activities">
+                <tbody>
+                    @foreach (var t in titles)
+                    {
+                        <tr>
+                            <td class="title-cell"><span class="ellipsis" title="@t.WindowTitle">@(string.IsNullOrEmpty(t.WindowTitle) ? "(utan titel)" : t.WindowTitle)</span></td>
+                            <td class="num nowrap">@Clock.Hm(t.Duration)</td>
+                            <td class="nowrap muted">@Clock.Time(t.FirstUtc)–@Clock.Time(t.LastUtc)</td>
+                            <td class="nowrap">
+                                <Swatch Color="@t.Project.Color" />
+                                <select class="select small inline" value="@(t.Project.Id?.ToString() ?? "")" @onchange="e => AssignAsync(t.AppName, t.WindowTitle, e)">
+                                    <option value="">Ej tilldelad</option>
+                                    @foreach (var p in _projects) { <option value="@p.Id">@p.Name</option> }
+                                </select>
+                                @if (t.Manual) { <span class="pill" title="Manuellt tilldelad">manuell</span> }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </section>
+    }
+
+    @if (_showDetails)
+    {
+        <section class="card">
+            <div class="card-head"><h2>Detaljerad lista</h2><a class="muted" href="/export/aktiviteter.csv?from=@_day.ToString("yyyy-MM-dd")&to=@_day.ToString("yyyy-MM-dd")">Exportera CSV</a></div>
+            <table class="table">
+                <thead><tr><th>Start</th><th>Slut</th><th class="num">Längd</th><th>Enhet</th><th>Program</th><th>Titel</th><th>Projekt</th></tr></thead>
+                <tbody>
+                    @foreach (var a in _summary.Activities.Where(a => a.Duration.TotalSeconds >= Math.Max(_minSeconds, Options.Value.MinVisibleSeconds)))
+                    {
+                        <tr class="@(a.IsIdle ? "muted" : "")">
+                            <td class="nowrap">@Clock.TimeSec(a.StartUtc)</td>
+                            <td class="nowrap">@Clock.TimeSec(a.EndUtc)</td>
+                            <td class="num nowrap">@Clock.Hm(a.Duration)</td>
+                            <td>@a.Device?.Name</td>
+                            <td>@(a.IsIdle ? "Inaktiv" : a.AppName)</td>
+                            <td class="title-cell"><span class="ellipsis" title="@a.WindowTitle">@a.WindowTitle</span></td>
+                            <td>@if (!a.IsIdle) { <Swatch Color="@(a.Project?.Color ?? Palette.Unassigned)" /> @(a.Project?.Name ?? "–") }</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </section>
+    }
+}
+
+@code {
+    [SupplyParameterFromQuery(Name = "d")] public string? DayParam { get; set; }
+    [SupplyParameterFromQuery(Name = "enhet")] public int? DeviceParam { get; set; }
+
+    private DateOnly _day;
+    private int? _deviceId;
+    private DaySummary? _summary;
+    private List<Project> _projects = new();
+    private bool _onlyUnassigned;
+    private bool _createRule = true;
+    private bool _showDetails;
+    private int _minSeconds = 5;
+    private string? _message;
+
+    protected override async Task OnInitializedAsync() => _projects = await Catalog.GetProjectsAsync();
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _day = DateOnly.TryParse(DayParam, out var d) ? d : Clock.Today;
+        _deviceId = DeviceParam;
+        _summary = await ReportSvc.GetDayAsync(_day, _deviceId);
+    }
+
+    private async Task AssignAsync(string app, string? title, ChangeEventArgs e)
+    {
+        var raw = e.Value?.ToString();
+        if (string.IsNullOrEmpty(raw) && title is null) return; // placeholder-valet för "hela programmet"
+        int? projectId = int.TryParse(raw, out var id) && id > 0 ? id : null;
+
+        var n = await Catalog.AssignAsync(_day, _deviceId, app, title, projectId);
+        var msg = $"{n} aktiviteter uppdaterade.";
+
+        if (_createRule && projectId is { } pid)
+        {
+            var rule = title is null || title.Length == 0
+                ? new Rule { ProjectId = pid, Field = RuleField.App, Match = RuleMatch.Equals, Pattern = app, Priority = 0 }
+                : new Rule { ProjectId = pid, Field = RuleField.Title, Match = RuleMatch.Contains, Pattern = title, Priority = 10 };
+            await Catalog.SaveRuleAsync(rule);
+            var applied = await Catalog.ReapplyRulesAsync(onlyUnassigned: true);
+            msg += $" Regel skapad ({(rule.Field == RuleField.App ? "program" : "titel")} ≈ \"{Shorten(rule.Pattern)}\"), {applied} tidigare aktiviteter tilldelade.";
+        }
+
+        _message = msg;
+        _summary = await ReportSvc.GetDayAsync(_day, _deviceId);
+    }
+
+    private static string Shorten(string s) => s.Length > 50 ? s[..47] + "…" : s;
+}
